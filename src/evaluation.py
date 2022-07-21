@@ -276,7 +276,7 @@ def eval_bert(use_template_sentences: bool) -> None:
                 data_cos_sim[object_id][room_id] = float(cos(embeddings[j], room_embeddings[j]))
 
         else:
-            embeddings = embeddings = enc.documents_to_vecs([object_id])
+            embeddings = enc.documents_to_vecs([object_id])
             for j, room_id in enumerate(rooms):
                 data_cos_sim[object_id][room_id] = float(cos(embeddings[0], room_embeddings[j]))
 
