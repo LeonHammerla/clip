@@ -9,14 +9,14 @@ from bert_encoder import BertCLSEncoder
 
 def calculate_f_scores(rooms: List[str],
                        objects: List[str],
-                       data_cos_sim: Dict[str, Dict[str, float]],
+                       data_new: Dict[str, Dict[str, float]],
                        data: Dict[str, Dict[str, float]]) -> Tuple[float, float, float, List[float]]:
 
     """
     Function for calculating all different kinds of f1-scores.
     :param rooms:
     :param objects:
-    :param data_cos_sim:
+    :param data_new:
     :param data:
     :return:
     """
@@ -38,7 +38,7 @@ def calculate_f_scores(rooms: List[str],
     for i, room in enumerate(rooms):
         tp, fp, fn, tn = 0, 0, 0, 0
         for j, object_id in enumerate(objects):
-            if data_cos_sim[object_id] == i:
+            if data_new[object_id] == i:
                 if data[object_id] == i:
                     tp += 1
                     global_tp += 1
@@ -174,11 +174,15 @@ def construct_template_room(room: str) -> str:
     return f"This is usually in the {room}"
 
 
-def calculate_room_for_object(object_dict: Dict[str, float]) -> int:
+def calculate_room_for_object_max(object_dict: Dict[str, float]) -> int:
     return max(range(len(list(object_dict.values()))), key=list(object_dict.values()).__getitem__)
 
+def calculate_room_for_object_min(object_dict: Dict[str, float]) -> int:
+    return min(range(len(list(object_dict.values()))), key=list(object_dict.values()).__getitem__)
 
-def eval_clip(use_template_sentences: bool) -> None:
+
+def eval_clip(use_template_sentences: bool,
+              distance_measurement: str) -> None:
     """
     Function for calculating f-score of zero shot-classification of
     object-room relations. For this Evaluation CLIP is used.
@@ -190,13 +194,17 @@ def eval_clip(use_template_sentences: bool) -> None:
     model_name = 'M-CLIP/XLM-Roberta-Large-Vit-L-14'
     model = pt_multilingual_clip.MultilingualCLIP.from_pretrained(model_name)
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
-    # cos_similarity-function for torch tensors
+    # cos_similarity-function for torch tensors and euclidean distance function
     cos = torch.nn.CosineSimilarity(dim=0)
+    eucl = torch.nn.PairwiseDistance(p=2)
+    dot = torch.dot
+    ddist = {"cos": cos, "eucl": eucl, "dot": dot}
+
     # get all (strings) rooms and objects in data
     objects, rooms = get_all_strings(data)
 
-    # new_data based on cos similarity
-    data_cos_sim = dict()
+    # new_data based on cos similarity or euclidean distance
+    data_new = dict()
 
 
     if use_template_sentences:
@@ -210,33 +218,39 @@ def eval_clip(use_template_sentences: bool) -> None:
     i = 0
     for object_id in tqdm(objects, desc="Calculating Embeddings"):
         sent_batch = [] # room/object
-        data_cos_sim[object_id] = dict()
+        data_new[object_id] = dict()
 
         if use_template_sentences:
             for j, room_id in enumerate(rooms):
                 sent_batch.append(construct_template_object(word=object_id, room=room_id))
             embeddings = model.forward(sent_batch, tokenizer) # [num_rooms, model_size: 768]
             for j, room_id in enumerate(rooms):
-                data_cos_sim[object_id][room_id] = float(cos(embeddings[j], room_embeddings[j]))
+                data_new[object_id][room_id] = float(ddist[distance_measurement](embeddings[j], room_embeddings[j]))
 
         else:
             embeddings = model.forward([object_id], tokenizer)
             for j, room_id in enumerate(rooms):
-                data_cos_sim[object_id][room_id] = float(cos(embeddings[0], room_embeddings[j]))
+                data_new[object_id][room_id] = float(ddist[distance_measurement](embeddings[0], room_embeddings[j]))
 
         del embeddings
         i += 1
 
     for object_id in tqdm(objects, desc="Calculating Labels"):
-        data[object_id] = calculate_room_for_object(data[object_id])
-        data_cos_sim[object_id] = calculate_room_for_object(data_cos_sim[object_id])
+        data[object_id] = calculate_room_for_object_max(data[object_id])
+        if distance_measurement == "cos":
+            data_new[object_id] = calculate_room_for_object_max(data_new[object_id])
+        elif distance_measurement == "eucl":
+            data_new[object_id] = calculate_room_for_object_min(data_new[object_id])
+        elif distance_measurement == "dot":
+            data_new[object_id] = calculate_room_for_object_max(data_new[object_id])
 
-    macro_f1, weighted_f1, micro_f1, f1_class_scores = calculate_f_scores(rooms, objects, data_cos_sim, data)
+    macro_f1, weighted_f1, micro_f1, f1_class_scores = calculate_f_scores(rooms, objects, data_new, data)
 
     print_result(rooms, macro_f1, weighted_f1, micro_f1, f1_class_scores, "CLIP")
 
 
-def eval_bert(use_template_sentences: bool) -> None:
+def eval_bert(use_template_sentences: bool,
+              distance_measurement: str) -> None:
     """
     Function for calculating f-score of zero shot-classification of
     object-room relations. For this Evaluation BERT is used.
@@ -246,13 +260,16 @@ def eval_bert(use_template_sentences: bool) -> None:
     data = read_data()
     # load model and tokenizer (+modelname)
     enc = BertCLSEncoder()
-    # cos_similarity-function for torch tensors
+    # cos_similarity-function for torch tensors and euclidean distance function
     cos = torch.nn.CosineSimilarity(dim=0)
+    eucl = torch.nn.PairwiseDistance(p=2)
+    dot = torch.dot
+    ddist = {"cos": cos, "eucl": eucl, "dot": dot}
     # get all (strings) rooms and objects in data
     objects, rooms = get_all_strings(data)
 
-    # new_data based on cos similarity
-    data_cos_sim = dict()
+    # new_data based on cos similarity or euclidean distance
+    data_new = dict()
 
 
     if use_template_sentences:
@@ -266,28 +283,33 @@ def eval_bert(use_template_sentences: bool) -> None:
     i = 0
     for object_id in tqdm(objects, desc="Calculating Embeddings"):
         sent_batch = []  # room/object
-        data_cos_sim[object_id] = dict()
+        data_new[object_id] = dict()
 
         if use_template_sentences:
             for j, room_id in enumerate(rooms):
                 sent_batch.append(construct_template_object(word=object_id, room=room_id))
             embeddings = enc.documents_to_vecs(sent_batch)  # [num_rooms, model_size: 1024]
             for j, room_id in enumerate(rooms):
-                data_cos_sim[object_id][room_id] = float(cos(embeddings[j], room_embeddings[j]))
+                data_new[object_id][room_id] = float(ddist[distance_measurement](embeddings[j], room_embeddings[j]))
 
         else:
             embeddings = enc.documents_to_vecs([object_id])
             for j, room_id in enumerate(rooms):
-                data_cos_sim[object_id][room_id] = float(cos(embeddings[0], room_embeddings[j]))
+                data_new[object_id][room_id] = float(ddist[distance_measurement](embeddings[0], room_embeddings[j]))
 
         del embeddings
         i += 1
 
     for object_id in tqdm(objects, desc="Calculating Labels"):
-        data[object_id] = calculate_room_for_object(data[object_id])
-        data_cos_sim[object_id] = calculate_room_for_object(data_cos_sim[object_id])
+        data[object_id] = calculate_room_for_object_max(data[object_id])
+        if distance_measurement == "cos":
+            data_new[object_id] = calculate_room_for_object_max(data_new[object_id])
+        elif distance_measurement == "eucl":
+            data_new[object_id] = calculate_room_for_object_min(data_new[object_id])
+        elif distance_measurement == "dot":
+            data_new[object_id] = calculate_room_for_object_max(data_new[object_id])
 
-    macro_f1, weighted_f1, micro_f1, f1_class_scores = calculate_f_scores(rooms, objects, data_cos_sim, data)
+    macro_f1, weighted_f1, micro_f1, f1_class_scores = calculate_f_scores(rooms, objects, data_new, data)
 
 
     print_result(rooms, macro_f1, weighted_f1, micro_f1, f1_class_scores, "BERT")
@@ -296,10 +318,10 @@ def eval_bert(use_template_sentences: bool) -> None:
 if __name__ == "__main__":
     print("without Templates")
 
-    eval_bert(use_template_sentences=False)
-    eval_clip(use_template_sentences=False)
+    eval_bert(use_template_sentences=False, distance_measurement="dot")
+    eval_clip(use_template_sentences=False, distance_measurement="dot")
 
     print("With Templates")
 
-    eval_bert(use_template_sentences=True)
-    eval_clip(use_template_sentences=True)
+    eval_bert(use_template_sentences=True, distance_measurement="dot")
+    eval_clip(use_template_sentences=True, distance_measurement="dot")
