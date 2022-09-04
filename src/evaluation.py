@@ -109,7 +109,7 @@ def read_data() -> Dict[str, Dict[str, float]]:
     Function to read in data.
     Returns this data in format of a dictionary where every
     key is an item and every value is another dict containing (key, value)
-    pairs of romm-id and probability for this room to contain the item.
+    pairs of room-id and probability for this room to contain the item.
     :return:
     """
     data = []
@@ -250,7 +250,9 @@ def eval_clip(use_template_sentences: bool,
 
 
 def eval_bert(use_template_sentences: bool,
-              distance_measurement: str) -> None:
+              distance_measurement: str,
+              model_version: str = 'bert-large-uncased',
+              sent_method: str = "CLS") -> None:
     """
     Function for calculating f-score of zero shot-classification of
     object-room relations. For this Evaluation BERT is used.
@@ -259,7 +261,7 @@ def eval_bert(use_template_sentences: bool,
     # read in data
     data = read_data()
     # load model and tokenizer (+modelname)
-    enc = BertCLSEncoder()
+    enc = BertCLSEncoder(version=model_version)
     # cos_similarity-function for torch tensors and euclidean distance function
     cos = torch.nn.CosineSimilarity(dim=0)
     eucl = torch.nn.PairwiseDistance(p=2)
@@ -275,9 +277,9 @@ def eval_bert(use_template_sentences: bool,
     if use_template_sentences:
         # getting template embeddings for every room
         room_sent_batch = [construct_template_room(room) for room in rooms]
-        room_embeddings = enc.documents_to_vecs(room_sent_batch)
+        room_embeddings = enc.documents_to_vecs(room_sent_batch, mode=sent_method)
     else:
-        room_embeddings = enc.documents_to_vecs(rooms)
+        room_embeddings = enc.documents_to_vecs(rooms, mode=sent_method)
 
     # Main-loop for calculating embeddings of all
     i = 0
@@ -288,12 +290,12 @@ def eval_bert(use_template_sentences: bool,
         if use_template_sentences:
             for j, room_id in enumerate(rooms):
                 sent_batch.append(construct_template_object(word=object_id, room=room_id))
-            embeddings = enc.documents_to_vecs(sent_batch)  # [num_rooms, model_size: 1024]
+            embeddings = enc.documents_to_vecs(sent_batch, mode=sent_method)  # [num_rooms, model_size: 1024]
             for j, room_id in enumerate(rooms):
                 data_new[object_id][room_id] = float(ddist[distance_measurement](embeddings[j], room_embeddings[j]))
 
         else:
-            embeddings = enc.documents_to_vecs([object_id])
+            embeddings = enc.documents_to_vecs([object_id], mode=sent_method)
             for j, room_id in enumerate(rooms):
                 data_new[object_id][room_id] = float(ddist[distance_measurement](embeddings[0], room_embeddings[j]))
 
@@ -318,10 +320,18 @@ def eval_bert(use_template_sentences: bool,
 if __name__ == "__main__":
     print("without Templates")
 
-    eval_bert(use_template_sentences=False, distance_measurement="dot")
-    eval_clip(use_template_sentences=False, distance_measurement="dot")
+    eval_bert(use_template_sentences=False,
+              distance_measurement="cos",
+              model_version='xlm-roberta-large',
+              sent_method="AVG")
+    """
+    eval_clip(use_template_sentences=False, distance_measurement="cos")
 
     print("With Templates")
 
-    eval_bert(use_template_sentences=True, distance_measurement="dot")
-    eval_clip(use_template_sentences=True, distance_measurement="dot")
+    eval_bert(use_template_sentences=True,
+              distance_measurement="cos",
+              model_version='xlm-roberta-large',
+              sent_method="AVG")
+    eval_clip(use_template_sentences=True, distance_measurement="cos")
+    """
